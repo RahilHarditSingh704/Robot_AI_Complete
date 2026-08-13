@@ -1,0 +1,27 @@
+# Merged dependencies for the kiosk assistant (Ruby) and the robot control
+# stack, which now run as one process - see CLAUDE.md's Architecture section.
+#
+# Versions are pinned to the set currently proven working on this Pi
+# (Python 3.12, aarch64). Relax them if you're deliberately upgrading;
+# opencv-python-headless and piper-tts are the two worth pinning hardest,
+# since they're the ones that fall back to a very slow source build if no
+# aarch64 wheel matches.
+#
+# Install:  python3.12 -m venv venv && venv/bin/pip install -r requirements.txt
+# Also needs, from apt:  ffmpeg  (nothing else - Vosk and its ffmpeg
+# transcoding step were dropped when the robot's voice feature was removed)
+
+Flask==3.1.3
+gunicorn==26.0.0
+
+# Ruby: chat/transcription/TTS over the Gemini API, local Piper voices,
+# and the local sentiment scorer that picks her facial expression.
+requests==2.34.2
+python-dotenv==1.2.2
+piper-tts==1.6.0
+vaderSentiment==3.3.2
+
+# Robot: the ESP32 serial link, and OpenCV for the camera feed plus the
+# YuNet face detector behind Follow me.
+pyserial==3.5
+opencv-python-headless==5.0.0.93

@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Ruby Kiosk Frame Unlocker",
+  "version": "1.0",
+  "description": "Lets the kiosk launcher show sites like Google and YouTube full-screen inside the assistant, by dropping the headers that forbid framing.",
+  "permissions": ["declarativeNetRequest", "browsingData"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "unframe",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://127.0.0.1:5000/*", "https://localhost:5000/*"],
+      "js": ["flag.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "all_frames": true,
+      "js": ["activity.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,1268 @@
+/* ===========================================================================
+   Kiosk mode: the app launcher, the full-screen app view, and the draggable
+   pill that gets you back out. Palette is inherited from style.css so the
+   launcher feels like the same device as Ruby's face.
+   =========================================================================== */
+
+:root {
+  --kiosk-bg: radial-gradient(ellipse at center, #14202b 0%, #060a0f 100%);
+  --kiosk-accent: #4fd1ff;
+  --kiosk-text: #eaf4fb;
+  --kiosk-dim: #9fbdd0;
+  --kiosk-surface: rgba(255, 255, 255, 0.06);
+  --kiosk-surface-hi: rgba(255, 255, 255, 0.12);
+  --kiosk-line: rgba(255, 255, 255, 0.1);
+  --kiosk-good: #7dffb3;
+  --kiosk-warn: #ffb74f;
+  --kiosk-bad: #ff5a5a;
+}
+
+/* ---------- Branding ----------
+   Drawn as background-images rather than <img> so a missing logo.png renders
+   as nothing at all, instead of a broken-image icon on the wall display.
+
+   The wordmark is dark navy, which is nearly invisible on this dark palette,
+   so the corner mark gets a brightness lift. If it still reads poorly on the
+   real panel, `filter: invert(1) hue-rotate(180deg)` flips the text light
+   while keeping the spectrogram colourful. */
+
+.cornerLogo {
+  position: absolute;
+  top: 20px;
+  left: 24px;
+  width: 132px;
+  height: 120px;
+  /* Two layers: the mark, over a soft light disc. The disc is what makes the
+     navy "ECE SUMMER WORKSHOPS" ring legible - without it the wordmark
+     disappears into the dark background and only the spectrogram shows. */
+  background-image: url("logo.png"),
+    radial-gradient(circle at 50% 50%, rgba(233, 243, 250, 0.9) 0 54%, rgba(233, 243, 250, 0) 70%);
+  background-size: contain, 100% 100%;
+  background-repeat: no-repeat, no-repeat;
+  background-position: center, center;
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* style.css sets no positioning on #app, and the logo/clock/hint are all
+   absolutely positioned against it. */
+#app {
+  position: relative;
+}
+
+/* Kiosk also carries the logo as a large, very faint backdrop. Absolutely
+   positioned so it doesn't become a flex item in #kiosk's column layout. */
+#kiosk::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("logo.png");
+  background-size: min(62vw, 62vh) auto;
+  background-repeat: no-repeat;
+  background-position: center 56%;
+  opacity: 0.05;
+  filter: brightness(1.4);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Keep the launcher's own content above the backdrop. Note the logo is
+   deliberately absent here: it's absolutely positioned, and giving it
+   position:relative turned it into a flex item in #kiosk's column layout,
+   which squeezed and clipped it. It already sits above the backdrop via its
+   own z-index. */
+#kioskHeader,
+#tileGrid {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Assistant-screen clock ----------
+   Same information as the kiosk header, dialled well back so it never
+   competes with Ruby's face. */
+
+#assistantClockWrap {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  opacity: 0.3;
+  pointer-events: none;
+  z-index: 5;
+}
+
+#assistantClock {
+  font-size: clamp(1.8rem, 4vw, 2.9rem);
+  font-weight: 200;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--kiosk-text);
+}
+
+#assistantDate {
+  margin-top: 5px;
+  font-size: clamp(0.75rem, 1.4vw, 0.95rem);
+  letter-spacing: 0.08em;
+  color: var(--kiosk-dim);
+}
+
+/* ---------- "Tap the screen to start interacting" ---------- */
+
+/* A real scrim, not a floating label: it covers the whole screen, dims
+   everything behind it including the input bar and the Apps tab, and swallows
+   the first tap so nothing underneath can be pressed by accident. The tap that
+   dismisses it does nothing else. */
+#tapHint {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 22vh;
+  background: rgba(3, 8, 13, 0.62);
+  backdrop-filter: blur(3px);
+  cursor: pointer;
+  touch-action: none;
+}
+
+#tapHint[hidden] {
+  display: none;
+}
+
+/* Bright against the dimmed screen - it's the one thing meant to be read. */
+#tapHint span {
+  font-size: clamp(1.05rem, 2.4vw, 1.7rem);
+  font-weight: 300;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--kiosk-text);
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.6);
+  animation: tapHintBreathe 3.4s ease-in-out infinite;
+}
+
+@keyframes tapHintBreathe {
+  0%, 100% { opacity: 0.62; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tapHint span { animation: none; opacity: 0.9; }
+}
+
+/* ---------- Edge tabs (right = open kiosk, left = back to Ruby) ---------- */
+
+.edgeTab {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  width: 72px;
+  height: 230px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 1px solid var(--kiosk-line);
+  background: rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(8px);
+  color: var(--kiosk-text);
+  cursor: pointer;
+  transition: background 0.15s ease, width 0.15s ease;
+}
+
+.edgeTab svg {
+  width: 30px;
+  height: 30px;
+  fill: currentColor;
+  flex: 0 0 auto;
+}
+
+.edgeTabLabel {
+  writing-mode: vertical-rl;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--kiosk-dim);
+}
+
+.edgeTabRight {
+  right: 0;
+  border-right: none;
+  border-radius: 16px 0 0 16px;
+}
+
+.edgeTabLeft {
+  left: 0;
+  border-left: none;
+  border-radius: 0 16px 16px 0;
+}
+
+.edgeTabLeft .edgeTabLabel {
+  writing-mode: vertical-lr;
+}
+
+.edgeTab:active {
+  background: var(--kiosk-surface-hi);
+  width: 80px;
+}
+
+/* ---------- Kiosk home ---------- */
+
+#kiosk {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--kiosk-bg);
+  color: var(--kiosk-text);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* style.css gives #app display:flex, which would otherwise beat [hidden]. */
+#app[hidden],
+#kiosk[hidden],
+#appView[hidden],
+#miniApp[hidden],
+#appBlocked[hidden],
+#dragShield[hidden] {
+  display: none;
+}
+
+#kioskHeader {
+  flex: 0 0 auto;
+  text-align: center;
+  padding: 26px 0 14px;
+}
+
+#kioskClock {
+  font-size: clamp(2.4rem, 6vw, 4rem);
+  font-weight: 200;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+#kioskDate {
+  margin-top: 6px;
+  font-size: clamp(0.85rem, 1.6vw, 1.05rem);
+  color: var(--kiosk-dim);
+  letter-spacing: 0.06em;
+}
+
+/* Capped and centred: left to fill 1920px the tiles spread into nine thin
+   columns, which looks sparse and shrinks the touch targets. */
+#tileGrid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 22px;
+  align-content: start;
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 24px 72px calc(28px + env(safe-area-inset-bottom));
+}
+
+.tile {
+  aspect-ratio: 1 / 0.82;
+  border-radius: 22px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  color: var(--kiosk-text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
+}
+
+.tile:active {
+  transform: scale(0.94);
+  background: var(--kiosk-surface-hi);
+  border-color: var(--kiosk-accent);
+}
+
+.tileIcon {
+  font-size: 2.5rem;
+  line-height: 1;
+}
+
+.tileLabel {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Full-screen app view ---------- */
+
+#appView {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: #000;
+}
+
+#appFrame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+#appFrame[hidden] {
+  display: none;
+}
+
+/* The pill sits above the site and stays put while it scrolls. touch-action
+   is none so a drag never turns into a page scroll or a browser gesture. */
+#exitPill {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 17px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(10, 20, 28, 0.55);
+  backdrop-filter: blur(12px);
+  color: var(--kiosk-text);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  opacity: 0.72;
+  transition: opacity 0.2s ease, transform 0.12s ease, background 0.15s ease;
+}
+
+#exitPill svg {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
+}
+
+#exitPill:active {
+  opacity: 1;
+  transform: scale(0.95);
+  background: rgba(10, 20, 28, 0.8);
+}
+
+#exitPill.dragging {
+  opacity: 1;
+  cursor: grabbing;
+  transform: scale(1.06);
+  transition: opacity 0.2s ease, background 0.15s ease;
+}
+
+/* Eases back to the snapped edge position after a drag ends. */
+#exitPill.settling {
+  transition: left 0.22s ease, top 0.22s ease, opacity 0.2s ease, transform 0.12s ease;
+}
+
+#dragShield {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+/* ---------- "This site refuses to be embedded" card ---------- */
+
+#appBlocked {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 8vw;
+  text-align: center;
+  background: var(--kiosk-bg);
+  color: var(--kiosk-text);
+}
+
+#appBlocked h2 {
+  margin: 0;
+  font-size: clamp(1.3rem, 3vw, 1.9rem);
+  font-weight: 600;
+}
+
+#appBlocked p {
+  margin: 0;
+  max-width: 640px;
+  line-height: 1.55;
+  color: var(--kiosk-dim);
+  font-size: clamp(0.95rem, 1.8vw, 1.1rem);
+}
+
+#appBlocked code {
+  display: block;
+  margin-top: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--kiosk-line);
+  color: var(--kiosk-accent);
+  font-size: 0.9rem;
+  word-break: break-all;
+  user-select: text;
+}
+
+/* ---------- Mini-apps ---------- */
+
+#miniApp {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  background: var(--kiosk-bg);
+  color: var(--kiosk-text);
+  padding: 34px 34px calc(34px + env(safe-area-inset-bottom));
+}
+
+.miniTitle {
+  margin: 0 0 22px;
+  font-size: clamp(1.4rem, 3vw, 2rem);
+  font-weight: 300;
+  letter-spacing: 0.04em;
+  color: var(--kiosk-dim);
+}
+
+.miniTabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.miniTab {
+  padding: 11px 22px;
+  border-radius: 999px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  color: var(--kiosk-dim);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.miniTab[aria-selected="true"] {
+  background: var(--kiosk-accent);
+  border-color: var(--kiosk-accent);
+  color: #072028;
+}
+
+.miniPane[hidden] {
+  display: none;
+}
+
+.bigBtn {
+  padding: 15px 28px;
+  border-radius: 16px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  color: var(--kiosk-text);
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.bigBtn:active {
+  transform: scale(0.95);
+  background: var(--kiosk-surface-hi);
+}
+
+.bigBtn.primary {
+  background: var(--kiosk-accent);
+  border-color: var(--kiosk-accent);
+  color: #072028;
+}
+
+.bigBtn.danger {
+  border-color: rgba(255, 90, 90, 0.5);
+  color: var(--kiosk-bad);
+}
+
+.btnRow {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.card {
+  border-radius: 20px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  padding: 22px;
+}
+
+/* Clock / timer / stopwatch readout */
+
+.hugeReadout {
+  font-size: clamp(3.4rem, 13vw, 8rem);
+  font-weight: 200;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  text-align: center;
+  margin: 18px 0 28px;
+}
+
+.hugeReadout.ringing {
+  color: var(--kiosk-warn);
+  animation: kioskFlash 0.7s steps(1) infinite;
+}
+
+@keyframes kioskFlash {
+  50% { opacity: 0.25; }
+}
+
+.subReadout {
+  text-align: center;
+  color: var(--kiosk-dim);
+  font-size: 1.1rem;
+  margin-bottom: 20px;
+}
+
+.chipRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 22px;
+}
+
+.chip {
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  color: var(--kiosk-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chip:active {
+  background: var(--kiosk-surface-hi);
+}
+
+.alarmRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--kiosk-line);
+}
+
+.alarmRow time {
+  font-size: 1.8rem;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  flex: 1 1 auto;
+}
+
+.alarmRow.off time {
+  color: var(--kiosk-dim);
+  opacity: 0.5;
+}
+
+/* Not scoped to input[type="time"] - the Weather and Buildings search boxes
+   are text inputs and were rendering as bare white browser defaults. */
+.timeInput {
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  color: var(--kiosk-text);
+  font: inherit;
+  font-size: 1.3rem;
+  color-scheme: dark;
+}
+
+/* Weather */
+
+.wxNow {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  flex-wrap: wrap;
+  margin-bottom: 26px;
+}
+
+.wxIcon {
+  font-size: clamp(3.5rem, 9vw, 6rem);
+  line-height: 1;
+}
+
+.wxTemp {
+  font-size: clamp(3rem, 8vw, 5.5rem);
+  font-weight: 200;
+  line-height: 1;
+}
+
+.wxMeta {
+  color: var(--kiosk-dim);
+  line-height: 1.7;
+  font-size: 1.05rem;
+}
+
+.wxStrip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(84px, 1fr);
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 24px;
+}
+
+.wxCell {
+  text-align: center;
+  padding: 14px 8px;
+  border-radius: 16px;
+  background: var(--kiosk-surface);
+  border: 1px solid var(--kiosk-line);
+}
+
+.wxCell .l {
+  color: var(--kiosk-dim);
+  font-size: 0.85rem;
+}
+
+.wxCell .i {
+  font-size: 1.7rem;
+  margin: 6px 0;
+}
+
+.wxCell .t {
+  font-size: 1.15rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Notes */
+
+#noteText {
+  width: 100%;
+  min-height: 46vh;
+  border-radius: 18px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  color: var(--kiosk-text);
+  font: inherit;
+  font-size: 1.2rem;
+  line-height: 1.6;
+  padding: 20px;
+  outline: none;
+  resize: none;
+}
+
+#noteText:focus {
+  border-color: var(--kiosk-accent);
+}
+
+#drawCanvas {
+  width: 100%;
+  height: 52vh;
+  border-radius: 18px;
+  border: 1px solid var(--kiosk-line);
+  background: #0b1620;
+  touch-action: none;
+  display: block;
+}
+
+.penDot {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.penDot[aria-pressed="true"] {
+  border-color: var(--kiosk-text);
+  transform: scale(1.15);
+}
+
+.saveHint {
+  color: var(--kiosk-dim);
+  font-size: 0.9rem;
+  margin-left: auto;
+}
+
+/* Radio */
+
+.stationGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+  margin-bottom: 26px;
+}
+
+.station {
+  text-align: left;
+  padding: 18px 20px;
+  border-radius: 18px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  color: var(--kiosk-text);
+  font: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.station:active {
+  transform: scale(0.96);
+}
+
+.station[aria-current="true"] {
+  border-color: var(--kiosk-accent);
+  background: rgba(79, 209, 255, 0.14);
+}
+
+.station .n {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin-bottom: 4px;
+}
+
+.station .g {
+  color: var(--kiosk-dim);
+  font-size: 0.88rem;
+}
+
+/* Sliders (volume, brightness, radio volume) */
+
+.sliderRow {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 20px 0;
+}
+
+.sliderRow label {
+  flex: 0 0 118px;
+  color: var(--kiosk-dim);
+  font-weight: 600;
+}
+
+.sliderRow output {
+  flex: 0 0 62px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.15rem;
+}
+
+input[type="range"].bigRange {
+  flex: 1 1 auto;
+  height: 46px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"].bigRange::-webkit-slider-runnable-track {
+  height: 12px;
+  border-radius: 6px;
+  background: var(--kiosk-surface-hi);
+}
+
+input[type="range"].bigRange::-moz-range-track {
+  height: 12px;
+  border-radius: 6px;
+  background: var(--kiosk-surface-hi);
+}
+
+input[type="range"].bigRange::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 34px;
+  height: 34px;
+  margin-top: -11px;
+  border-radius: 50%;
+  background: var(--kiosk-accent);
+  border: none;
+}
+
+input[type="range"].bigRange::-moz-range-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--kiosk-accent);
+  border: none;
+}
+
+/* System info */
+
+.infoGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+  margin: 22px 0;
+}
+
+.infoCell {
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: var(--kiosk-surface);
+  border: 1px solid var(--kiosk-line);
+}
+
+.infoCell .k {
+  color: var(--kiosk-dim);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.infoCell .v {
+  font-size: 1.25rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Launcher group headings ---------- */
+
+.groupTitle {
+  grid-column: 1 / -1;
+  margin: 14px 0 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--kiosk-dim);
+}
+
+.groupTitle:first-child {
+  margin-top: 0;
+}
+
+/* The one tile you should be able to find without reading. */
+.tileEmergency {
+  border-color: rgba(255, 90, 90, 0.55);
+  background: rgba(255, 90, 90, 0.12);
+}
+
+.tileEmergency:active {
+  border-color: var(--kiosk-bad);
+  background: rgba(255, 90, 90, 0.24);
+}
+
+/* ---------- Emergency mini-app ---------- */
+
+.emgBanner {
+  border-radius: 20px;
+  padding: 22px 26px;
+  margin-bottom: 20px;
+  background: rgba(255, 90, 90, 0.14);
+  border: 1px solid rgba(255, 90, 90, 0.5);
+}
+
+.emgBannerTitle {
+  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
+  font-weight: 700;
+}
+
+.emgBannerSub {
+  margin-top: 6px;
+  color: var(--kiosk-text);
+  font-size: 1.05rem;
+}
+
+.emgWhere {
+  margin-bottom: 26px;
+  color: var(--kiosk-dim);
+  font-size: 1rem;
+}
+
+.emgWhere .k {
+  color: var(--kiosk-accent);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.8rem;
+  margin-right: 8px;
+}
+
+.emgSection {
+  margin: 26px 0 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--kiosk-dim);
+}
+
+.emgGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.emgCard {
+  border-radius: 18px;
+  border: 1px solid var(--kiosk-line);
+  background: var(--kiosk-surface);
+  padding: 18px 20px;
+}
+
+.emgCard.critical {
+  border-color: rgba(255, 90, 90, 0.5);
+  background: rgba(255, 90, 90, 0.1);
+}
+
+.emgName {
+  color: var(--kiosk-dim);
+  font-size: 0.95rem;
+  margin-bottom: 6px;
+}
+
+.emgNum {
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  user-select: text;
+}
+
+.emgCard.critical .emgNum {
+  color: #ff8a8a;
+}
+
+.emgNote {
+  margin-top: 6px;
+  color: var(--kiosk-dim);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.emgFooter {
+  margin: 30px 0 0;
+  color: var(--kiosk-dim);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  max-width: 760px;
+}
+
+/* ---------- Transit ---------- */
+
+.ttcGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 16px;
+}
+
+.ttcStop {
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin-bottom: 14px;
+  color: var(--kiosk-accent);
+}
+
+.ttcRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--kiosk-line);
+}
+
+.ttcRoute {
+  flex: 0 0 auto;
+  min-width: 54px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: var(--kiosk-surface-hi);
+  font-weight: 700;
+  text-align: center;
+}
+
+.ttcDir {
+  flex: 1 1 auto;
+  color: var(--kiosk-dim);
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.ttcMins {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.15rem;
+}
+
+.ttcMins b {
+  font-weight: 700;
+}
+
+.ttcMins b.soon {
+  color: var(--kiosk-good);
+  font-size: 1.5rem;
+}
+
+.ttcMins i {
+  color: var(--kiosk-dim);
+  font-style: normal;
+  margin: 0 6px;
+}
+
+/* ---------- Buildings ---------- */
+
+.bdRow {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--kiosk-line);
+}
+
+.bdCode {
+  flex: 0 0 62px;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--kiosk-accent);
+  letter-spacing: 0.04em;
+}
+
+.bdName {
+  flex: 1 1 auto;
+  font-size: 1.05rem;
+}
+
+.bdNote {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(125, 255, 179, 0.16);
+  color: var(--kiosk-good);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.bdAddr {
+  flex: 0 0 auto;
+  color: var(--kiosk-dim);
+  font-size: 0.98rem;
+  text-align: right;
+}
+
+/* ---------- "Still there?" idle prompt ---------- */
+
+#idlePrompt {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 10, 16, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+#idlePrompt[hidden] {
+  display: none;
+}
+
+#idleCard {
+  text-align: center;
+  padding: 44px 54px;
+  border-radius: 26px;
+  background: rgba(20, 32, 43, 0.96);
+  border: 1px solid var(--kiosk-line);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  color: var(--kiosk-text);
+  max-width: 90vw;
+}
+
+#idleCard h2 {
+  margin: 0 0 12px;
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  font-weight: 300;
+}
+
+#idleCard p {
+  margin: 0 0 26px;
+  color: var(--kiosk-dim);
+  font-size: 1.15rem;
+}
+
+#idleCount {
+  color: var(--kiosk-accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+#idleCard .bigBtn {
+  font-size: 1.2rem;
+  padding: 18px 34px;
+}
+
+/* ---------- Mouse affordances ----------
+   Guarded on (hover: hover) so a touchscreen never gets a hover state stuck
+   on the last thing tapped - only real pointing devices see these. */
+
+@media (hover: hover) {
+  .tile:hover {
+    background: var(--kiosk-surface-hi);
+    border-color: var(--kiosk-accent);
+  }
+
+  .edgeTab:hover {
+    background: var(--kiosk-surface-hi);
+    width: 80px;
+  }
+
+  .chip:hover,
+  .bigBtn:hover,
+  .station:hover,
+  .miniTab:hover {
+    background: var(--kiosk-surface-hi);
+  }
+
+  .bigBtn.primary:hover {
+    filter: brightness(1.12);
+    background: var(--kiosk-accent);
+  }
+
+  #exitPill:hover {
+    opacity: 1;
+  }
+}
+
+/* ---------- Remote Control mini-app ---------- */
+
+.rcCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.rcState {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.rcDot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--kiosk-dim);
+  flex: 0 0 auto;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.rcDot.on {
+  background: var(--kiosk-good);
+  box-shadow: 0 0 0 6px rgba(125, 255, 179, 0.15);
+}
+
+.rcStateLabel {
+  font-size: 1.5rem;
+  font-weight: 300;
+  letter-spacing: 0.03em;
+}
+
+.rcStateSub {
+  margin-top: 3px;
+  font-size: 0.9rem;
+  color: var(--kiosk-dim);
+  max-width: 46ch;
+}
+
+.rcAddress {
+  margin-bottom: 20px;
+}
+
+.rcAddressLabel {
+  font-size: 0.9rem;
+  color: var(--kiosk-dim);
+  margin-bottom: 10px;
+}
+
+/* The kiosk has no keyboard, so this address exists to be read off the
+   screen and typed into a phone. Big, monospaced, and selectable-looking
+   even though nothing here is selectable. */
+.rcUrl {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: clamp(1.1rem, 2.6vw, 1.7rem);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--kiosk-accent);
+  word-break: break-all;
+}
+
+.rcUrl.rcUrlMissing {
+  color: var(--kiosk-warn);
+  font-family: inherit;
+  font-weight: 400;
+}
+
+.rcAddressLabel.rcWarn {
+  color: var(--kiosk-warn);
+}
+
+.rcAlso {
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  color: var(--kiosk-dim);
+}
+
+.rcAlso:empty {
+  display: none;
+}
+
+.rcNote {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--kiosk-dim);
+}
+
+.rcExplain {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--kiosk-dim);
+  max-width: 68ch;
+}
+
+.rcExplain p {
+  margin: 0 0 12px;
+}
+
+/* Full-screen dimmer, driven by the System mini-app's brightness slider. */
+
+#dimScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}

@@ -1,0 +1,643 @@
+<!doctype html>
+<html>
+<head>
+  <title>Robot Control</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #14161a;
+      --panel: #1d2026;
+      --border: #2c3038;
+      --text: #e8e9ec;
+      --muted: #8b8f98;
+      --accent: #3b82f6;
+      --danger: #e0393f;
+      --danger-active: #b32b30;
+      --ok: #22c55e;
+      --warn: #eab308;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px 32px 24px;
+      width: 100%;
+      max-width: 720px;
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      margin: 0 0 4px;
+    }
+    .subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      margin: 0 0 24px;
+    }
+
+    #status-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      margin: -14px 0 18px;
+    }
+    #wifi-indicator {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    #cpu-indicator {
+      display: none;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    #wifi-indicator .bars {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 12px;
+      flex-shrink: 0;
+    }
+    #wifi-indicator .bar {
+      width: 3px;
+      background: var(--border);
+      border-radius: 1px;
+    }
+    #wifi-indicator .bar:nth-child(1) { height: 25%; }
+    #wifi-indicator .bar:nth-child(2) { height: 45%; }
+    #wifi-indicator .bar:nth-child(3) { height: 65%; }
+    #wifi-indicator .bar:nth-child(4) { height: 85%; }
+    #wifi-indicator .bar:nth-child(5) { height: 100%; }
+    #wifi-indicator.excellent .bar.filled, #wifi-indicator.good .bar.filled { background: var(--ok); }
+    #wifi-indicator.fair .bar.filled { background: var(--warn); }
+    #wifi-indicator.weak .bar.filled, #wifi-indicator.poor .bar.filled { background: var(--danger); }
+    .dpad {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-rows: 1fr 1fr 1fr;
+      gap: 10px;
+      margin: 0 auto;
+      max-width: 260px;
+    }
+
+    /* Follow me is driving. Only the direction buttons go dead - Stop stays
+       live on purpose, because with the Follow toggle now living on the
+       kiosk's own screen (see the banner below) it is the only way someone
+       out here can take back control of a robot that's driving itself. The
+       server agrees: /robot/command rejects every manual command except Stop
+       while the follower is running. */
+    .dpad.follow-locked button:not(#stop) {
+      opacity: 0.3;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+    }
+    button {
+      font-size: 15px;
+      font-weight: 600;
+      font-family: inherit;
+      color: var(--text);
+      background: #262a32;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0;
+      aspect-ratio: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.08s ease, transform 0.05s ease, border-color 0.08s ease;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    button:hover { background: #2d323b; border-color: #3a3f48; }
+    button:active,
+    button.pressed { transform: scale(0.94); background: #343a44; }
+
+    .btn-icon { font-size: 22px; line-height: 1; }
+
+    #forward { grid-column: 2; grid-row: 1; }
+    #rotate-ccw { grid-column: 1; grid-row: 2; }
+    #stop { grid-column: 2; grid-row: 2; }
+    #rotate-cw { grid-column: 3; grid-row: 2; }
+    #backward { grid-column: 2; grid-row: 3; }
+
+    #stop {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: white;
+    }
+    #stop:hover { background: var(--danger-active); border-color: var(--danger-active); }
+    #stop:active, #stop.pressed { background: var(--danger-active); transform: scale(0.94); }
+
+    #status {
+      margin-top: 22px;
+      font-size: 13px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 18px;
+    }
+    #status .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+    }
+    #status.ok .dot { background: var(--ok); }
+    #status.err .dot { background: var(--danger); }
+    #status.ok { color: var(--ok); }
+    #status.err { color: var(--danger); }
+
+    .hint {
+      margin: 14px 0 0;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    #follow-banner {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 10px 14px;
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.45);
+      border-radius: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--ok);
+    }
+    #follow-banner .pulse {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--ok);
+      flex-shrink: 0;
+      animation: follow-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes follow-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.25; }
+    }
+
+    #video {
+      display: none;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: contain;
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 18px;
+    }
+
+    #video-controls {
+      display: none;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      margin: -10px 0 18px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    #res-select {
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--text);
+      background: #262a32;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Robot Control</h1>
+    <p class="subtitle">Tap and hold a direction to drive</p>
+
+    <div id="status-row">
+      <div id="wifi-indicator">
+        <span class="bars">
+          <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+        </span>
+        <span id="wifi-text"></span>
+      </div>
+      <div id="cpu-indicator">
+        <span id="cpu-text"></span>
+      </div>
+    </div>
+
+    <div id="follow-banner">
+      <span class="pulse"></span>
+      <span>Follow me is running from the kiosk screen. Press Stop to take over.</span>
+    </div>
+
+    <img id="video" alt="Camera feed">
+    <div id="video-controls">
+      <label for="res-select">Feed quality</label>
+      <select id="res-select" onchange="setVideoResolution(this.value)">
+        <option value="720p">720p</option>
+        <option value="360p">360p (lower lag)</option>
+        <option value="240p">240p (lowest lag)</option>
+        <option value="off">Off (no feed)</option>
+      </select>
+    </div>
+
+    <div class="dpad">
+      <button id="forward" aria-label="Forward">
+        <span class="btn-icon">&#9650;</span>
+      </button>
+      <button id="rotate-ccw" aria-label="Rotate left">
+        <span class="btn-icon">&#8630;</span>
+      </button>
+      <button id="stop" aria-label="Stop">
+        <span class="btn-icon">&#9632;</span>
+      </button>
+      <button id="rotate-cw" aria-label="Rotate right">
+        <span class="btn-icon">&#8631;</span>
+      </button>
+      <button id="backward" aria-label="Backward">
+        <span class="btn-icon">&#9660;</span>
+      </button>
+    </div>
+
+    <div id="status"><span class="dot"></span><span class="label">Ready</span></div>
+    <p class="hint">Keyboard: &#8593; &#8595; drive, &#8592;&#8594; or L/R rotate</p>
+  </div>
+
+  <script>
+    // Which single character means what on the wire is decided once, on the
+    // server, by motion.py - not spelled out here. Before the merge this
+    // page hardcoded its own mapping and face_follow.py hardcoded a
+    // different one, and they disagreed; templating it in means changing
+    // MOTION_PROFILE moves the D-pad, the keyboard and follow mode together.
+    const CMD = {{ commands|tojson }};
+
+    const statusEl = document.getElementById('status');
+    const labelEl = statusEl.querySelector('.label');
+
+    function setStatus(cls, text) {
+      statusEl.className = cls;
+      labelEl.textContent = text;
+    }
+
+    // Only one /robot/command request is ever allowed in flight at a time.
+    // Firing each key/button press as its own overlapping fetch let bursts of
+    // rapid input pile up several concurrent requests against the Pi, and
+    // concurrent requests' responses (and so their effect on the serial
+    // link) aren't guaranteed to complete in the order they were sent - a
+    // slow-to-schedule request for an older button press can complete after
+    // a newer one and overwrite it. Coalescing to "at most one in flight,
+    // plus the single latest pending command" fixes both: no pile-up, and
+    // the last command applied is always the last one actually pressed.
+    //
+    // COMMAND_TIMEOUT_MS bounds each attempt: fetch() has no built-in
+    // timeout, so without this one stalled connection would hold cmdInFlight
+    // true and silently swallow every press as pendingCmd for as long as it
+    // hung - a stuck Stop wouldn't reach the ESP32 at all, and MotorLink's
+    // resend thread would just keep re-affirming whatever direction was
+    // already running. Aborting and re-dispatching (the failed command,
+    // unless something newer superseded it) bounds that to this timeout.
+    let cmdInFlight = false;
+    let pendingCmd = null;
+    const COMMAND_TIMEOUT_MS = 1500;
+
+    function send(cmd, btn) {
+      if (btn) {
+        btn.classList.add('pressed');
+        setTimeout(() => btn.classList.remove('pressed'), 120);
+      }
+      if (cmdInFlight) {
+        pendingCmd = cmd;
+        return;
+      }
+      dispatchCommand(cmd);
+    }
+
+    function dispatchCommand(cmd) {
+      cmdInFlight = true;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), COMMAND_TIMEOUT_MS);
+
+      fetch('/robot/command', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cmd: cmd}),
+        signal: controller.signal
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) setStatus('ok', d.label || d.cmd);
+        else setStatus('err', d.error || 'Error');
+      })
+      .catch(() => {
+        setStatus('err', 'Disconnected');
+        // Nothing newer queued up while this was stuck - re-assert it so a
+        // dropped command (especially Stop) doesn't just get abandoned.
+        if (pendingCmd === null) pendingCmd = cmd;
+      })
+      .finally(() => {
+        clearTimeout(timeoutId);
+        cmdInFlight = false;
+        if (pendingCmd !== null) {
+          const next = pendingCmd;
+          pendingCmd = null;
+          dispatchCommand(next);
+        }
+      });
+    }
+
+    document.getElementById('forward').addEventListener('click', function () { send(CMD.forward, this); });
+    document.getElementById('backward').addEventListener('click', function () { send(CMD.backward, this); });
+    document.getElementById('rotate-cw').addEventListener('click', function () { send(CMD.turn_cw, this); });
+    document.getElementById('rotate-ccw').addEventListener('click', function () { send(CMD.turn_ccw, this); });
+    document.getElementById('stop').addEventListener('click', function () { send(CMD.stop, this); });
+
+    // Safety: covers the "tab closed/navigated away" case with an explicit
+    // stop faster than waiting on anything else to notice. This can't help
+    // with a dead network (sendBeacon still needs a working connection) -
+    // that case is the server-side heartbeat watchdog's job.
+    //
+    // Skipped while the follower is driving. Follow me is started from the
+    // kiosk's own screen and this page may well be a bystander watching the
+    // feed; a Stop is how someone here takes over deliberately, so sending
+    // one automatically would mean any onlooker closing their tab silently
+    // switches off a follow nobody asked them to end.
+    window.addEventListener('beforeunload', () => {
+      if (followEnabled) return;
+      navigator.sendBeacon('/robot/command', JSON.stringify({cmd: CMD.stop}));
+    });
+
+    // Keyboard driving: mirrors the D-pad buttons. Holding a key sends its
+    // command exactly once on keydown (MotorLink's resend thread keeps it
+    // alive on the wire); releasing sends Stop. Only one direction is
+    // tracked at a time since the robot can't drive two directions at once.
+    const KEY_MAP = {
+      arrowup: CMD.forward, arrowdown: CMD.backward,
+      arrowleft: CMD.turn_ccw, arrowright: CMD.turn_cw,
+      l: CMD.turn_ccw, r: CMD.turn_cw,
+    };
+    const KEY_BTN = {
+      arrowup: 'forward', arrowdown: 'backward', arrowleft: 'rotate-ccw', arrowright: 'rotate-cw',
+      l: 'rotate-ccw', r: 'rotate-cw',
+    };
+    let activeKey = null;
+
+    window.addEventListener('keydown', (e) => {
+      if (followEnabled) return;
+      const key = e.key.toLowerCase();
+      const cmd = KEY_MAP[key];
+      if (!cmd) return;
+      e.preventDefault();
+      if (e.repeat || activeKey === key) return;
+      activeKey = key;
+      const btn = document.getElementById(KEY_BTN[key]);
+      if (btn) btn.classList.add('pressed');
+      send(cmd);
+    });
+
+    window.addEventListener('keyup', (e) => {
+      const key = e.key.toLowerCase();
+      if (!KEY_MAP[key]) return;
+      e.preventDefault();
+      const btn = document.getElementById(KEY_BTN[key]);
+      if (btn) btn.classList.remove('pressed');
+      if (activeKey === key) {
+        activeKey = null;
+        send(CMD.stop);
+      }
+    });
+
+    // If the key-up event never arrives (alt-tab, key released while
+    // unfocused), don't leave the motors stuck driving.
+    window.addEventListener('blur', () => {
+      if (activeKey) {
+        const btn = document.getElementById(KEY_BTN[activeKey]);
+        if (btn) btn.classList.remove('pressed');
+        activeKey = null;
+        send(CMD.stop);
+      }
+    });
+
+    // Follow me lives on the kiosk screen now, so there's no toggle here -
+    // but this page still has to know when the follower is driving, because
+    // the server rejects manual commands while it is and a D-pad that looked
+    // live but did nothing would just read as broken. Polled rather than
+    // set-and-forget: it can start and stop entirely without this page's
+    // involvement (someone at the kiosk, or a motor-protection trip).
+    const dpadEl = document.querySelector('.dpad');
+    const followBanner = document.getElementById('follow-banner');
+    let followEnabled = false;
+
+    function setFollowUI(enabled) {
+      followEnabled = enabled;
+      dpadEl.classList.toggle('follow-locked', enabled);
+      followBanner.style.display = enabled ? 'flex' : 'none';
+    }
+
+    function pollFollowStatus() {
+      fetch('/robot/follow_status')
+        .then(r => r.json())
+        .then(d => {
+          if (d.enabled !== followEnabled) setFollowUI(d.enabled);
+        })
+        .catch(() => {});
+    }
+
+    pollFollowStatus();
+    setInterval(pollFollowStatus, 1500);
+
+    // WiFi signal indicator: the Pi's own link to its access point (not this
+    // browser's), to help tell a flaky WiFi uplink apart from other causes
+    // of lag/disconnects. On its own longer interval rather than folded into
+    // the 1.5s follow poll - it's a slow-moving diagnostic and there's no
+    // reason for it to add to the request rate it's partly meant to explain.
+    const wifiIndicatorEl = document.getElementById('wifi-indicator');
+    const wifiTextEl = document.getElementById('wifi-text');
+    const wifiBarEls = Array.from(wifiIndicatorEl.querySelectorAll('.bar'));
+    const WIFI_BAR_COUNT = {Excellent: 5, Good: 4, Fair: 3, Weak: 2, Poor: 1};
+
+    function pollWifiStatus() {
+      fetch('/robot/wifi_status')
+        .then(r => r.json())
+        .then(d => {
+          if (!d.available) {
+            wifiIndicatorEl.style.display = 'none';
+            return;
+          }
+          wifiIndicatorEl.style.display = 'flex';
+          wifiIndicatorEl.className = d.quality.toLowerCase();
+          const filled = WIFI_BAR_COUNT[d.quality] || 0;
+          wifiBarEls.forEach((bar, i) => bar.classList.toggle('filled', i < filled));
+          wifiTextEl.textContent = `Wi-Fi: ${d.dbm} dBm (${d.quality})`;
+        })
+        .catch(() => {});
+    }
+
+    pollWifiStatus();
+    setInterval(pollWifiStatus, 4000);
+
+    // Pi CPU usage, polled alongside WiFi signal on the same interval.
+    // Server returns {available: false} for one poll after startup (needs
+    // two /proc/stat samples to compute a delta) - indicator just stays
+    // hidden until the second poll lands.
+    const cpuIndicatorEl = document.getElementById('cpu-indicator');
+    const cpuTextEl = document.getElementById('cpu-text');
+
+    function pollCpuStatus() {
+      fetch('/robot/cpu_status')
+        .then(r => r.json())
+        .then(d => {
+          if (!d.available) {
+            cpuIndicatorEl.style.display = 'none';
+            return;
+          }
+          cpuIndicatorEl.style.display = 'flex';
+          cpuTextEl.textContent = `CPU: ${d.percent}%`;
+        })
+        .catch(() => {});
+    }
+
+    pollCpuStatus();
+    setInterval(pollCpuStatus, 4000);
+
+    // Safety: lets the server tell "still connected, button just held" apart
+    // from "connection died mid-drive" (see HEARTBEAT_TIMEOUT_S in
+    // hardware.py). Sent continuously on its own short interval, independent
+    // of whether a button is down - a held button only POSTs /robot/command
+    // once, on press, so that endpoint alone goes quiet for the whole hold
+    // even when nothing's wrong. If this stops arriving while a command is
+    // held, the server stops the motors on its own - this page doesn't need
+    // to be the one to notice and can't (a dead link can't send a stop
+    // command either).
+    function sendHeartbeat() {
+      fetch('/robot/heartbeat', {method: 'POST'}).catch(() => {});
+    }
+
+    sendHeartbeat();
+    setInterval(sendHeartbeat, 750);
+
+    // Camera feed is optional: only show it if a USB camera was actually
+    // found at startup. If the stream later drops (camera unplugged), hide
+    // it again rather than leaving a broken image icon on the page.
+    const videoEl = document.getElementById('video');
+    const videoControlsEl = document.getElementById('video-controls');
+    const resSelectEl = document.getElementById('res-select');
+
+    function setVideoResolution(res) {
+      fetch('/robot/video_resolution', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({resolution: res})
+      }).catch(() => {});
+
+      // "off" only stops the server encoding frames - the browser would
+      // otherwise sit on the already-open /robot/video_feed connection
+      // forever, still costing nothing per-frame but never actually
+      // closing. Drop the <img> src so the connection itself closes, and
+      // only open a fresh one when coming back on (switching among the
+      // resolutions above never touches src - that's a server-side change
+      // on the same open stream).
+      if (res === 'off') {
+        videoEl.removeAttribute('src');
+        videoEl.style.display = 'none';
+      } else if (!videoEl.getAttribute('src')) {
+        videoEl.src = '/robot/video_feed';
+        videoEl.style.display = 'block';
+      }
+    }
+
+    fetch('/robot/camera_status')
+      .then(r => r.json())
+      .then(d => {
+        if (d.available) {
+          videoControlsEl.style.display = 'flex';
+          fetch('/robot/video_resolution')
+            .then(r => r.json())
+            .then(d2 => {
+              resSelectEl.value = d2.resolution;
+              if (d2.resolution !== 'off') {
+                videoEl.src = '/robot/video_feed';
+                videoEl.style.display = 'block';
+              }
+            })
+            .catch(() => {
+              videoEl.src = '/robot/video_feed';
+              videoEl.style.display = 'block';
+            });
+        }
+      })
+      .catch(() => {});
+
+    // Reconnect the stream on drop instead of leaving it dead: the server
+    // bounds a stalled write to VIDEO_FEED_SOCKET_TIMEOUT_S (robot_api.py),
+    // but that only frees the *server's* thread - the browser still needs
+    // to notice the connection died and open a fresh one, which an <img>
+    // never does on its own. Skip retrying while the feed has deliberately
+    // been turned off (res-select === 'off'; that path clears src without an
+    // error so it won't reach here anyway, but checked defensively).
+    const VIDEO_RECONNECT_DELAY_MS = 2000;
+    let videoReconnectTimer = null;
+    videoEl.addEventListener('load', () => { videoEl.style.display = 'block'; });
+    videoEl.addEventListener('error', () => {
+      videoEl.style.display = 'none';
+      if (videoReconnectTimer || resSelectEl.value === 'off') return;
+      videoReconnectTimer = setTimeout(() => {
+        videoReconnectTimer = null;
+        if (resSelectEl.value !== 'off') {
+          videoEl.src = '/robot/video_feed?t=' + Date.now();
+        }
+      }, VIDEO_RECONNECT_DELAY_MS);
+    });
+
+    // The camera hardware itself can also vanish and come back (a USB
+    // brownout, not a network drop - see camera.py) while an existing
+    // video_feed connection is open. The server ends that response as soon
+    // as it notices, but a multipart/x-mixed-replace stream that just stops
+    // sending new parts doesn't reliably fire the <img>'s error event across
+    // browsers before then - so on top of the error-retry above, poll the
+    // lightweight camera_status endpoint and force a fresh connection
+    // whenever it flips from unavailable back to available.
+    let cameraWasAvailable = null;
+    function pollCameraStatus() {
+      fetch('/robot/camera_status')
+        .then(r => r.json())
+        .then(d => {
+          if (d.available) {
+            if (cameraWasAvailable === false && resSelectEl.value !== 'off') {
+              videoEl.src = '/robot/video_feed?t=' + Date.now();
+              videoEl.style.display = 'block';
+            }
+          } else {
+            videoEl.style.display = 'none';
+          }
+          cameraWasAvailable = d.available;
+        })
+        .catch(() => {});
+    }
+    setInterval(pollCameraStatus, 2000);
+  </script>
+</body>
+</html>

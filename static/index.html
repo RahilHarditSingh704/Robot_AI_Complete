@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Assistant</title>
+<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="kiosk.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- Logo and clock are background furniture, not content: aria-hidden keeps
+       a screen reader from announcing them ahead of Ruby herself. -->
+  <div class="cornerLogo" aria-hidden="true"></div>
+
+  <div id="assistantClockWrap" aria-hidden="true">
+    <div id="assistantClock">--:--</div>
+    <div id="assistantDate"></div>
+  </div>
+
+  <div id="tapHint" hidden><span>Tap the screen to start interacting</span></div>
+
+  <!-- Live view from the robot's own camera, shown only while Follow me is
+       running - the one moment it matters who Ruby has actually locked onto.
+       The green box around the tracked face is drawn server-side by
+       face_follow.draw_overlay(), so this is a plain <img> with no canvas or
+       per-frame JS on the kiosk's side. -->
+  <div id="followPreview" hidden>
+    <img id="followPreviewImg" alt="View from the robot's camera">
+    <div id="followPreviewLabel"><span class="previewDot"></span>Following</div>
+  </div>
+
+  <div id="faceWrap" data-state="idle" data-expression="neutral">
+    <svg id="face" viewBox="0 0 400 260" xmlns="http://www.w3.org/2000/svg">
+      <ellipse class="blush blushLeft" cx="82" cy="152" rx="30" ry="18" />
+      <ellipse class="blush blushRight" cx="318" cy="152" rx="30" ry="18" />
+      <path class="sparkle sparkleLeft" d="M 50 116 L 55 129 L 68 134 L 55 139 L 50 152 L 45 139 L 32 134 L 45 129 Z" />
+      <path class="sparkle sparkleRight" d="M 350 116 L 355 129 L 368 134 L 355 139 L 350 152 L 345 139 L 332 134 L 345 129 Z" />
+      <g class="eyesGroup">
+        <rect class="eye eyeLeft" x="110" y="70" width="34" height="60" rx="17" />
+        <rect class="eye eyeRight" x="256" y="70" width="34" height="60" rx="17" />
+        <path class="happyEye happyEyeLeft" d="M 112 72 L 144 100 L 112 128" />
+        <path class="happyEye happyEyeRight" d="M 288 72 L 256 100 L 288 128" />
+      </g>
+      <rect class="mouth" x="150" y="176" width="100" height="16" rx="8" />
+      <path class="mouthSmile" d="M 133 186 Q 200 226 267 186" />
+    </svg>
+    <div class="waveform" id="waveform">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="thinkingDots" id="thinkingDots">
+      <span></span><span></span><span></span>
+    </div>
+  </div>
+
+  <div id="captionBar">
+    <p id="captionText">Tap the mic or type below to start chatting.</p>
+  </div>
+
+  <div id="inputBar">
+    <!-- Hidden until /robot/follow_status reports the camera and face model
+         are both actually present, same as every other optional feature in
+         this stack - a button that can only ever fail is worse than no
+         button. -->
+    <button id="followBtn" class="pillBtn" aria-pressed="false" aria-label="Follow me" hidden>
+      <span class="pillDot"></span><span class="pillLabel">Follow me</span>
+    </button>
+    <button id="ttsToggle" class="iconBtn" aria-label="Toggle spoken replies" title="Toggle spoken replies">🔊</button>
+    <div class="voiceSelectWrap">
+      <span id="ttsEngineDot" class="engineDot"></span>
+      <select id="ttsVoiceSelect" class="voiceSelect" aria-label="TTS voice" title="TTS voice"></select>
+    </div>
+    <input id="textInput" type="text" placeholder="Ask me anything…" autocomplete="off" />
+    <button id="micBtn" class="iconBtn" aria-label="Talk" title="Talk">🎤</button>
+    <button id="sendBtn" class="iconBtn" aria-label="Send" title="Send">➤</button>
+  </div>
+
+  <button id="kioskOpenBtn" class="edgeTab edgeTabRight" aria-label="Open apps" title="Open apps">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
+    <span class="edgeTabLabel">Apps</span>
+  </button>
+
+</div>
+
+<!-- Kiosk home: the app launcher. Hidden until the right-edge tab is tapped. -->
+<div id="kiosk" hidden>
+  <button id="kioskBackBtn" class="edgeTab edgeTabLeft" aria-label="Back to assistant" title="Back to assistant">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5 L8 12 L15 19" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span class="edgeTabLabel">Ruby</span>
+  </button>
+
+  <div class="cornerLogo" aria-hidden="true"></div>
+
+  <header id="kioskHeader">
+    <div id="kioskClock">--:--</div>
+    <div id="kioskDate"></div>
+  </header>
+
+  <div id="tileGrid"></div>
+</div>
+
+<!-- App view: a website or a built-in mini-app, filling the whole screen.
+     The only chrome is #exitPill, which floats on top and can be dragged. -->
+<div id="appView" hidden>
+  <iframe id="appFrame" title="App" allow="autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write"></iframe>
+  <div id="miniApp" hidden></div>
+  <div id="appBlocked" hidden></div>
+
+  <!-- Swallows pointer events mid-drag so the iframe can't steal them. -->
+  <div id="dragShield" hidden></div>
+
+  <button id="exitPill" aria-label="Back to apps" title="Back to apps">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
+    <span>Apps</span>
+  </button>
+</div>
+
+<!-- "Still there?" — shown shortly before the kiosk resets itself to Ruby,
+     so nobody gets thrown out of a page they're still reading. -->
+<div id="idlePrompt" hidden>
+  <div id="idleCard">
+    <h2>Still there?</h2>
+    <p>Returning to the assistant in <span id="idleCount">30</span>s.</p>
+    <button id="idleStay" class="bigBtn primary">Yes, I'm still here</button>
+  </div>
+</div>
+
+<!-- Software screen dimmer (System mini-app). The HDMI panel has no
+     backlight control, so this is a full-screen scrim instead. -->
+<div id="dimScrim"></div>
+
+<script src="app.js"></script>
+<script src="miniapps.js"></script>
+<script src="kiosk.js"></script>
+</body>
+</html>
