@@ -14,6 +14,20 @@
        a screen reader from announcing them ahead of Ruby herself. -->
   <div class="cornerLogo" aria-hidden="true"></div>
 
+  <!-- Live motor current, measured on the ESP32's sense pins. Hidden until a
+       reading actually arrives, so an unplugged ESP32 (or one on older
+       firmware that doesn't report it) leaves no empty labels behind.
+       aria-hidden for the same reason as the clock: it changes every second,
+       and a screen reader announcing it forever would bury Ruby herself. -->
+  <!-- Rows hide individually, and the block hides only when they all would.
+       CPU is a fact about the Pi and the motor currents are facts about the
+       ESP32, so unplugging the ESP32 must not take the CPU readout with it. -->
+  <div id="motorCurrent" hidden aria-hidden="true">
+    <div class="mcRow" id="mcRowM1"><span class="mcLabel">Motor 1 current =</span><span class="mcValue" id="mcM1">—</span></div>
+    <div class="mcRow" id="mcRowM2"><span class="mcLabel">Motor 2 current =</span><span class="mcValue" id="mcM2">—</span></div>
+    <div class="mcRow" id="mcRowCpu"><span class="mcLabel">CPU usage =</span><span class="mcValue" id="mcCpu">—</span></div>
+  </div>
+
   <div id="assistantClockWrap" aria-hidden="true">
     <div id="assistantClock">--:--</div>
     <div id="assistantDate"></div>
@@ -63,9 +77,33 @@
          are both actually present, same as every other optional feature in
          this stack - a button that can only ever fail is worse than no
          button. -->
-    <button id="followBtn" class="pillBtn" aria-pressed="false" aria-label="Follow me" hidden>
-      <span class="pillDot"></span><span class="pillLabel">Follow me</span>
-    </button>
+    <!-- Follow me is two features behind one button. Tapping it while stopped
+         opens this chooser rather than starting anything, because "follow me"
+         on its own no longer says what the robot will do - drive after you, or
+         just turn its head. Tapping it while running is an unambiguous stop,
+         so that stays a single press with no menu in the way. -->
+    <div id="followWrap" hidden>
+      <div id="followMenu" role="menu" aria-labelledby="followBtn" hidden>
+        <button class="followOpt" role="menuitem" data-mode="body">
+          <span class="followOptIcon" aria-hidden="true">🤖</span>
+          <span class="followOptText">
+            <span class="followOptName">Body</span>
+            <span class="followOptHint">Drives after you</span>
+          </span>
+        </button>
+        <button class="followOpt" role="menuitem" data-mode="head">
+          <span class="followOptIcon" aria-hidden="true">👀</span>
+          <span class="followOptText">
+            <span class="followOptName">Head</span>
+            <span class="followOptHint">Turns to watch you</span>
+          </span>
+        </button>
+      </div>
+      <button id="followBtn" class="pillBtn" aria-pressed="false" aria-haspopup="menu"
+              aria-expanded="false" aria-label="Follow me">
+        <span class="pillDot"></span><span class="pillLabel">Follow me</span>
+      </button>
+    </div>
     <button id="ttsToggle" class="iconBtn" aria-label="Toggle spoken replies" title="Toggle spoken replies">🔊</button>
     <div class="voiceSelectWrap">
       <span id="ttsEngineDot" class="engineDot"></span>

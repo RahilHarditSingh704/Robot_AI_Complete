@@ -20,6 +20,7 @@ Two things moved out of here in the merge:
 from flask import Blueprint, Response, jsonify, render_template, request
 
 import access
+import face_follow
 import hardware
 import motion
 from camera import camera
@@ -87,6 +88,7 @@ def follow_status():
     return jsonify({
         "available": follower.is_available() and link.available,
         "enabled": follower.is_running(),
+        "mode": follower.mode if follower.is_running() else None,
         "disabled_reason": follower.disabled_reason,
     })
 
@@ -98,21 +100,66 @@ def follow():
     docstring."""
     data = request.get_json(force=True, silent=True) or {}
     enabled = bool(data.get("enabled"))
+    # Body is the default so an older client that only sends {"enabled": true}
+    # keeps its previous behaviour rather than erroring.
+    mode = str(data.get("mode") or face_follow.MODE_BODY).strip().lower()
 
     if enabled:
+        if mode not in face_follow.MODES:
+            return jsonify({
+                "ok": False,
+                "error": f"Unknown follow mode {mode!r}, expected one of {list(face_follow.MODES)}",
+            }), 400
         if not link.available:
             return jsonify({"ok": False, "error": f"No ESP32 connected ({link.reason})"}), 503
-        if not follower.start():
+        if not follower.start(mode):
             return jsonify({"ok": False, "error": "Camera or face model not available"}), 400
     else:
         follower.stop()
 
-    return jsonify({"ok": True, "enabled": follower.is_running()})
+    return jsonify({
+        "ok": True,
+        "enabled": follower.is_running(),
+        "mode": follower.mode if follower.is_running() else None,
+    })
 
 
 @robot.route("/camera_status")
 def camera_status():
     return jsonify({"available": camera.is_available()})
+
+
+@robot.route("/motor_current")
+def motor_current():
+    """Measured current through each motor, in amps.
+
+    Read by all three surfaces that show it - Ruby's screen, the Remote
+    Control mini-app, and the driving page - rather than each deriving it
+    some other way. The ESP32 measures it (it owns the sense pins, and
+    already samples them for its own protection logic) and pushes it up the
+    serial link; MotorLink just holds the latest one. So this endpoint is
+    cheap enough to poll at 1Hz from several places at once: no hardware is
+    touched, and no request is what causes a measurement to happen.
+
+    `available: false` covers no ESP32, an ESP32 that has gone quiet, and one
+    running firmware predating the CUR: line - all of which mean the same
+    thing to a display, which is to show no number rather than a wrong one.
+
+    `link` separates those cases for the one caller that needs them apart:
+    the driving page, which warns when the ESP32 has stopped answering. See
+    MotorLink.link_health(). It rides along here rather than getting its own
+    endpoint because this is already the only thing polling fast enough to
+    notice, and adding a second 1Hz poll to say the same thing would be waste.
+
+    `tripped` is the ESP32's current-protection latch, which fires for every
+    command source alike but previously had no Pi-side effect at all unless
+    Follow me was the one driving. See MotorLink.trip_state().
+    """
+    return jsonify({
+        **link.get_motor_currents(),
+        "link": link.link_health(),
+        "tripped": link.trip_state(),
+    })
 
 
 @robot.route("/wifi_status")

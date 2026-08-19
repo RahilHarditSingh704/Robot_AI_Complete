@@ -25,7 +25,7 @@ tracking logic is asking for the right thing.
 import time
 
 from camera import camera
-from face_follow import FaceFollower, is_available
+from face_follow import FaceFollower, follow_command_for, is_available
 
 import motion
 
@@ -36,11 +36,15 @@ WHY = {
     motion.TURN_CCW: "face is left of center",
     motion.STOP: "centered + good distance, or face lost",
 }
-# Wire character -> what the follower meant by it. Built from the live
-# mapping so this stays honest when MOTION_PROFILE changes, instead of
-# describing whatever the defaults happened to be when it was written.
+# Wire character -> what the follower meant by it. Keyed on what follow mode
+# actually puts on the wire - via face_follow's own resolver, so it stays
+# honest across a MOTION_PROFILE change or either of the follow-only invert
+# flags, rather than describing whatever the defaults were when this was
+# written. It has to be that resolver and not motion.WIRE_COMMANDS: follow
+# mode sends the lowercase FOLLOW_DUTY characters, so a map built from the
+# full-speed ones matches nothing but Stop and every line prints unlabelled.
 COMMAND_NAMES = {
-    motion.WIRE_COMMANDS[intent]: f"{motion.LABELS[intent].lower()} ({WHY[intent]})"
+    follow_command_for(intent): f"{motion.LABELS[intent].lower()} ({WHY[intent]})"
     for intent in motion.INTENTS
 }
 

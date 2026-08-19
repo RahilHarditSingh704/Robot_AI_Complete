@@ -78,6 +78,57 @@
   z-index: 1;
 }
 
+/* ---------- Motor current readout ----------
+   Top left, tucked under the corner logo (which ends around y=140). The three
+   other corners of Ruby's screen are taken: the clock is centred along the
+   top, the follow preview claims the top right while following, and the input
+   bar owns the bottom - so this is the one place a permanent readout can live
+   without moving when anything else appears.
+
+   Dialled back to the same opacity as the clock, and for the same reason:
+   this is a diagnostic on a screen whose actual job is to be a face. It's
+   readable when you look for it and invisible when you aren't.
+
+   Tabular numerals matter more here than on the clock - the value changes ten
+   times a minute at rest and continuously while driving, and without them the
+   whole line shifts sideways on every update. */
+
+#motorCurrent {
+  position: absolute;
+  top: 152px;
+  left: 26px;
+  opacity: 0.34;
+  pointer-events: none;
+  z-index: 5;
+  font-size: clamp(0.72rem, 1.15vw, 0.92rem);
+  letter-spacing: 0.04em;
+  line-height: 1.65;
+  color: var(--kiosk-dim);
+}
+
+#motorCurrent[hidden] {
+  display: none;
+}
+
+.mcRow {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.mcRow[hidden] {
+  display: none;
+}
+
+.mcValue {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--kiosk-text);
+  /* Holds the line still as the reading moves between "0.00 A" and "12.34 A",
+     and keeps both rows' numbers aligned with each other. */
+  min-width: 4.6em;
+}
+
 /* ---------- Assistant-screen clock ----------
    Same information as the kiosk header, dialled well back so it never
    competes with Ruby's face. */
@@ -1192,6 +1243,42 @@ input[type="range"].bigRange::-moz-range-thumb {
   font-size: 0.9rem;
   color: var(--kiosk-dim);
   max-width: 46ch;
+}
+
+/* Motor current. Two equal columns so the numbers line up with each other
+   rather than sitting at whatever width their labels happen to end at. */
+.rcCurrent {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.rcCurrent[hidden] {
+  display: none;
+}
+
+.rcCurrentCell {
+  flex: 1 1 180px;
+}
+
+.rcCurrentCell[hidden] {
+  display: none;
+}
+
+.rcCurrentLabel {
+  font-size: 0.9rem;
+  color: var(--kiosk-dim);
+}
+
+.rcCurrentValue {
+  margin-top: 4px;
+  font-size: 1.5rem;
+  font-weight: 300;
+  letter-spacing: 0.03em;
+  /* Updates once a second - tabular numerals stop the whole card twitching
+     as digits change width. */
+  font-variant-numeric: tabular-nums;
 }
 
 .rcAddress {

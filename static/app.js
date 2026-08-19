@@ -193,18 +193,39 @@
   // ---------- Speech (server-side TTS) ----------
 
   async function speak(text) {
-    if (!ttsEnabled || !text) {
+    if (!text) {
+      setFaceState("idle");
+      return;
+    }
+    await playSpeech(() =>
+      fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })
+    );
+  }
+
+  // Ruby's fixed lines - the ones she says on a button press rather than in
+  // reply to something - come from a recording the server made once and kept,
+  // so tapping Follow me doesn't spend Gemini TTS tokens reading the same
+  // sentence out again every time. The wording lives server-side in
+  // kiosk_api.CANNED_PHRASES; only the key travels from here, which is what
+  // stops what she says and what was recorded from drifting apart.
+  async function speakPhrase(key) {
+    await playSpeech(() => fetch("/api/tts/phrase/" + encodeURIComponent(key)));
+  }
+
+  // Shared by both: fetch some WAV, play it, and drive the face while it does.
+  async function playSpeech(request) {
+    if (!ttsEnabled) {
       setFaceState("idle");
       return;
     }
     stopSpeaking();
 
     try {
-      const resp = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
+      const resp = await request();
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
         throw new Error(data.error || "tts request failed");
@@ -229,7 +250,7 @@
       });
       await currentAudio.play();
     } catch (err) {
-      console.error("speak() failed:", err);
+      console.error("speech playback failed:", err);
       setFaceState("error");
       setTimeout(() => setFaceState("idle"), 1200);
     }
@@ -472,12 +493,15 @@
   // to start it, deliberately. The remote driving page can only see that
   // it's running and press Stop.
 
+  const followWrap = document.getElementById("followWrap");
   const followBtn = document.getElementById("followBtn");
+  const followMenu = document.getElementById("followMenu");
   const followPreview = document.getElementById("followPreview");
   const followPreviewImg = document.getElementById("followPreviewImg");
 
   const FOLLOW_POLL_MS = 1500;
   let followEnabled = false;
+  let followMode = null;
   let followBusy = false;
 
   // The preview is a live MJPEG connection, so it's opened only while follow
@@ -504,49 +528,108 @@
     followPreview.hidden = true;
   });
 
-  function setFollowUI(enabled, { error = false } = {}) {
-    followEnabled = enabled;
-    followBtn.setAttribute("aria-pressed", String(enabled));
-    followBtn.classList.toggle("error", error);
-    followBtn.querySelector(".pillLabel").textContent = enabled
-      ? "Following"
-      : "Follow me";
-    if (enabled) startPreview();
-    else stopPreview();
+  // What each mode is called on screen and how Ruby announces it. Keyed by the
+  // same strings face_follow.MODES uses, so the wire value and the label can't
+  // drift apart. `phrase` is a key into kiosk_api.CANNED_PHRASES rather than
+  // the sentence itself - she says these several times a day and they never
+  // change, so they're played from a recording instead of re-synthesized (see
+  // speakPhrase). The caption is separate because it goes on to say what to
+  // tap to stop, which is worth reading but not worth listening to.
+  const FOLLOW_MODES = {
+    body: {
+      label: "Following",
+      phrase: "follow-body",
+      caption: "Okay, I'll follow you! Tap Following to stop.",
+    },
+    head: {
+      label: "Watching",
+      phrase: "follow-head",
+      caption: "I'll turn my head to watch you. Tap Watching to stop.",
+    },
+  };
+
+  function setMenuOpen(open) {
+    followMenu.hidden = !open;
+    followBtn.setAttribute("aria-expanded", String(open));
   }
 
-  async function toggleFollow() {
+  function setFollowUI(enabled, mode, { error = false } = {}) {
+    followEnabled = enabled;
+    followMode = enabled ? mode : null;
+    followBtn.setAttribute("aria-pressed", String(enabled));
+    followBtn.classList.toggle("error", error);
+    followBtn.querySelector(".pillLabel").textContent =
+      enabled ? (FOLLOW_MODES[mode] || FOLLOW_MODES.body).label : "Follow me";
+    // Head mode moves the camera, so the preview is arguably more useful there
+    // than in body mode - show it for both.
+    if (enabled) startPreview();
+    else stopPreview();
+    if (enabled) setMenuOpen(false);
+  }
+
+  // Pressing the button while stopped only opens the chooser; nothing moves
+  // until a mode is picked. While running it's a plain stop.
+  function onFollowButton() {
+    if (followEnabled) {
+      setMenuOpen(false);
+      requestFollow(false, null);
+    } else {
+      setMenuOpen(followMenu.hidden);
+    }
+  }
+
+  async function requestFollow(enabled, mode) {
     if (followBusy) return;
     followBusy = true;
-    const next = !followEnabled;
     try {
       const resp = await fetch("/robot/follow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
+        body: JSON.stringify(enabled ? { enabled: true, mode } : { enabled: false }),
       });
       const data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error(data.error || "follow request failed");
 
-      setFollowUI(data.enabled);
+      setFollowUI(data.enabled, data.mode);
       if (data.enabled) {
+        const copy = FOLLOW_MODES[data.mode] || FOLLOW_MODES.body;
         setExpression("happy");
-        speak("Okay, I'll follow you!");
-        setCaption("Okay, I'll follow you! Tap Following to stop.");
+        speakPhrase(copy.phrase);
+        setCaption(copy.caption);
       } else {
         setExpression("neutral");
         setCaption("Stopped following.");
       }
     } catch (err) {
-      console.error("follow toggle failed", err);
-      setFollowUI(false, { error: true });
+      console.error("follow request failed", err);
+      setFollowUI(false, null, { error: true });
       setCaption("I couldn't start following - my camera might not be connected.");
     } finally {
       followBusy = false;
     }
   }
 
-  followBtn.addEventListener("click", toggleFollow);
+  followBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onFollowButton();
+  });
+
+  followMenu.querySelectorAll(".followOpt").forEach((opt) => {
+    opt.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setMenuOpen(false);
+      requestFollow(true, opt.dataset.mode);
+    });
+  });
+
+  // Tap anywhere else to dismiss. Without this the menu would be a trap on a
+  // touchscreen with no Escape key and nothing else to click.
+  document.addEventListener("click", () => {
+    if (!followMenu.hidden) setMenuOpen(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !followMenu.hidden) setMenuOpen(false);
+  });
 
   // Polled rather than trusted from the toggle alone: the server turns follow
   // off on its own after a motor-protection trip, and this screen has to
@@ -556,17 +639,22 @@
       const resp = await fetch("/robot/follow_status");
       const data = await resp.json();
 
-      followBtn.hidden = !data.available;
-      if (!data.available) return;
+      followWrap.hidden = !data.available;
+      if (!data.available) {
+        setMenuOpen(false);
+        return;
+      }
 
-      if (data.enabled === followEnabled) return;
+      if (data.enabled === followEnabled && data.mode === followMode) return;
 
       // Stopped by the server rather than by this button - say why, once, on
       // the transition. disabled_reason lingers server-side until the next
       // start(), so reacting to it on every poll would pin a stale message
       // to the screen long after the fact.
       const stoppedByServer = followEnabled && !data.enabled;
-      setFollowUI(data.enabled, { error: stoppedByServer && !!data.disabled_reason });
+      setFollowUI(data.enabled, data.mode, {
+        error: stoppedByServer && !!data.disabled_reason,
+      });
       if (stoppedByServer && data.disabled_reason) {
         setExpression("neutral");
         setCaption(`I had to stop following: ${data.disabled_reason.toLowerCase()}.`);
@@ -580,6 +668,64 @@
 
   pollFollowStatus();
   setInterval(pollFollowStatus, FOLLOW_POLL_MS);
+
+  // ---------- Motor current ----------
+  //
+  // Measured on the ESP32's sense pins and pushed up the serial link at 5Hz;
+  // this just reads whatever the last reading was (/robot/motor_current
+  // touches no hardware, so polling it costs nothing but the request).
+  //
+  // Polled at 1Hz rather than the firmware's 5Hz on purpose. This is a
+  // readout on a screen somebody glances at, not a control loop - five
+  // requests a second would be four wasted, and the number would flicker too
+  // fast to actually read. Nothing here needs to be fast: the thing that has
+  // to react quickly to a current spike is the protection logic on the ESP32
+  // itself, which never involves this screen at all.
+
+  const motorCurrentEl = document.getElementById("motorCurrent");
+  const mcRowM1 = document.getElementById("mcRowM1");
+  const mcRowM2 = document.getElementById("mcRowM2");
+  const mcRowCpu = document.getElementById("mcRowCpu");
+  const mcM1 = document.getElementById("mcM1");
+  const mcM2 = document.getElementById("mcM2");
+  const mcCpu = document.getElementById("mcCpu");
+  const STATS_POLL_MS = 1000;
+
+  function formatAmps(value) {
+    return typeof value === "number" && isFinite(value) ? `${value.toFixed(2)} A` : "—";
+  }
+
+  // Both readouts on one timer, fetched together and rendered once, rather
+  // than two independent pollers writing into the same block - otherwise the
+  // two halves update on separate ticks and the block can be mid-way through
+  // appearing while the other half still says nothing.
+  async function pollStats() {
+    const [current, cpu] = await Promise.all([
+      fetch("/robot/motor_current").then((r) => r.json()).catch(() => null),
+      fetch("/robot/cpu_status").then((r) => r.json()).catch(() => null),
+    ]);
+
+    // Missing readings hide their own row rather than freezing: a number that
+    // has silently stopped updating is worse than no number, because nothing
+    // about it looks wrong. The ESP32 half goes away when it is unplugged or
+    // has stopped answering; CPU only when the server itself is unreachable.
+    const haveCurrent = !!(current && current.available);
+    const haveCpu = !!(cpu && cpu.available);
+
+    mcRowM1.hidden = !haveCurrent;
+    mcRowM2.hidden = !haveCurrent;
+    mcRowCpu.hidden = !haveCpu;
+    motorCurrentEl.hidden = !(haveCurrent || haveCpu);
+
+    if (haveCurrent) {
+      mcM1.textContent = formatAmps(current.m1);
+      mcM2.textContent = formatAmps(current.m2);
+    }
+    if (haveCpu) mcCpu.textContent = `${cpu.percent.toFixed(1)}%`;
+  }
+
+  pollStats();
+  setInterval(pollStats, STATS_POLL_MS);
 
   // Leaving for kiosk mode: drop the mic and cut any reply off mid-sentence,
   // rather than leaving Ruby talking to an empty room while you browse.

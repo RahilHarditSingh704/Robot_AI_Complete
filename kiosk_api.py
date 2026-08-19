@@ -20,6 +20,7 @@ import re
 import shutil
 import socket
 import subprocess
+import threading
 import wave
 
 import requests
@@ -315,6 +316,81 @@ def synthesize_speech(text):
         )
 
 
+# ---------------------------------------------------------------------------
+# Canned phrases.
+#
+# The fixed lines Ruby says on a button press rather than in reply to
+# anything. They never vary, so paying Gemini to read the same sentence out
+# every time somebody taps Follow me is pure waste - it's the same wording, in
+# the same voice, at the same length, several times a day. Each one is
+# synthesized once, written to disk, and played from there forever after.
+#
+# Filed per voice, because the picker can switch between Gemini and the local
+# Piper voices at runtime and a recording in the wrong voice would be worse
+# than no cache at all. Switching back reuses the earlier recording rather than
+# re-spending on it.
+#
+# The text lives here rather than in the frontend so that what Ruby says and
+# what was recorded cannot drift apart: the browser only ever sends the key.
+# To re-record after editing one, delete its file - data/tts_cache/ is
+# disposable, and the whole directory is already gitignored along with data/.
+# ---------------------------------------------------------------------------
+PHRASE_CACHE_DIR = os.path.join(DATA_DIR, "tts_cache")
+
+CANNED_PHRASES = {
+    "follow-body": "Okay, I'll follow you!",
+    "follow-head": "Okay, I'll keep an eye on you!",
+}
+
+# Held across the synthesis, not just the file write, so two taps in quick
+# succession on a cold cache make one API call rather than two.
+_phrase_lock = threading.Lock()
+
+
+def _phrase_cache_path(key, voice_id):
+    return os.path.join(PHRASE_CACHE_DIR, f"{key}.{voice_id}.wav")
+
+
+def _read_cached_phrase(key, voice_id):
+    try:
+        with open(_phrase_cache_path(key, voice_id), "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def synthesize_phrase(key):
+    """Returns (wav_bytes, voice_id_used) for a canned phrase, going out to
+    the TTS engine at most once per phrase per voice."""
+    cached = _read_cached_phrase(key, tts_voice_id)
+    if cached is not None:
+        return cached, tts_voice_id
+
+    with _phrase_lock:
+        # Re-check: another request may have recorded it while we queued.
+        cached = _read_cached_phrase(key, tts_voice_id)
+        if cached is not None:
+            return cached, tts_voice_id
+
+        wav_bytes, engine_used = synthesize_speech(CANNED_PHRASES[key])
+        # Filed under the voice that actually spoke it rather than the one
+        # asked for. If Gemini was preferred but failed and Piper covered for
+        # it, caching that under "gemini" would make one rate limit permanent;
+        # this way the next press tries Gemini again.
+        path = _phrase_cache_path(key, engine_used)
+        try:
+            os.makedirs(PHRASE_CACHE_DIR, exist_ok=True)
+            tmp = f"{path}.part"
+            with open(tmp, "wb") as f:
+                f.write(wav_bytes)
+            os.replace(tmp, path)  # atomic, so a reader never gets half a wav
+        except OSError:
+            # A cache that can't be written is a slow cache, not a broken
+            # feature - she should still say the line.
+            current_app.logger.exception("could not cache phrase %r", key)
+        return wav_bytes, engine_used
+
+
 @kiosk.route("/")
 def index():
     return send_from_directory(current_app.static_folder, "index.html")
@@ -404,6 +480,32 @@ def tts():
 
     resp = Response(wav_bytes, mimetype="audio/wav")
     resp.headers["X-TTS-Engine"] = engine_used
+    return resp
+
+
+@kiosk.route("/api/tts/phrase/<key>", methods=["GET"])
+def tts_phrase(key):
+    """One of Ruby's fixed lines, from the recording rather than the API.
+
+    See CANNED_PHRASES. `key` is only ever looked up in that dict, so it can't
+    reach the filesystem on its own.
+    """
+    if key not in CANNED_PHRASES:
+        return jsonify({"error": "unknown phrase"}), 404
+
+    try:
+        wav_bytes, engine_used = synthesize_phrase(key)
+    except Exception as exc:
+        current_app.logger.exception("canned phrase tts failed")
+        return jsonify({"error": str(exc)}), 502
+
+    resp = Response(wav_bytes, mimetype="audio/wav")
+    resp.headers["X-TTS-Engine"] = engine_used
+    # The URL doesn't name a voice but the answer depends on which one is
+    # selected, so the browser must not keep a copy of its own - it would go
+    # on playing the old voice after a switch. Re-reading it from disk here
+    # costs nothing next to the API call this is avoiding.
+    resp.headers["Cache-Control"] = "no-store"
     return resp
 
 

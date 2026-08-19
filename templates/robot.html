@@ -66,12 +66,6 @@
       font-size: 11px;
       color: var(--muted);
     }
-    #cpu-indicator {
-      display: none;
-      align-items: center;
-      font-size: 11px;
-      color: var(--muted);
-    }
     #wifi-indicator .bars {
       display: inline-flex;
       align-items: flex-end;
@@ -92,6 +86,73 @@
     #wifi-indicator.excellent .bar.filled, #wifi-indicator.good .bar.filled { background: var(--ok); }
     #wifi-indicator.fair .bar.filled { background: var(--warn); }
     #wifi-indicator.weak .bar.filled, #wifi-indicator.poor .bar.filled { background: var(--danger); }
+
+    #link-banner, #trip-banner {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 10px 14px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.5);
+      border-radius: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--danger);
+    }
+    #link-banner .warn-dot, #trip-banner .warn-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--danger);
+      flex-shrink: 0;
+      animation: follow-pulse 1.6s ease-in-out infinite;
+    }
+    /* Amber, not red: unlike a dead link this is the hardware working as
+       designed, and it clears the moment you press anything else. */
+    #trip-banner {
+      background: rgba(245, 158, 11, 0.12);
+      border-color: rgba(245, 158, 11, 0.5);
+      color: var(--warn);
+      text-align: left;
+    }
+    #trip-banner .warn-dot { background: var(--warn); }
+
+    /* Live readings, kept apart from the Wi-Fi indicator in the status row
+       above. That one is a slow-moving diagnostic about the link; these are
+       measurements of what the robot is doing right now, and while you're
+       driving they're the thing on this page worth watching. CPU used to sit
+       up there next to Wi-Fi and moved down here to join them. */
+    #current-row {
+      display: none;
+      justify-content: center;
+      gap: 10px;
+      margin: 0 0 18px;
+      flex-wrap: wrap;
+    }
+    /* Needed because .current-cell sets display:flex, which would otherwise
+       win over the hidden attribute. */
+    .current-cell[hidden] { display: none; }
+    .current-cell {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      padding: 7px 14px;
+      background: #21252c;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .current-cell b {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      /* Tabular numerals and a fixed width: this updates every second, and
+         without both the D-pad below it shuffles sideways on every change. */
+      font-variant-numeric: tabular-nums;
+      min-width: 4.4em;
+      text-align: right;
+    }
     .dpad {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
@@ -244,9 +305,38 @@
         </span>
         <span id="wifi-text"></span>
       </div>
-      <div id="cpu-indicator">
-        <span id="cpu-text"></span>
-      </div>
+    </div>
+
+    <!-- Shown when the ESP32 has stopped answering. The D-pad deliberately
+         stays live: the link can come back on its own (MotorLink keeps
+         retrying), and greying out Stop because the robot is unreachable
+         would be exactly backwards. This is here so a dead link looks dead,
+         instead of every button reporting success into a void. -->
+    <div id="link-banner">
+      <span class="warn-dot"></span>
+      <span>The ESP32 has stopped responding — commands are not reaching the robot. Reconnecting…</span>
+    </div>
+
+    <!-- The ESP32's current protection has always applied to this page's
+         commands exactly as it does to Follow me, but until now nothing here
+         said so: the robot stopped dead, the firmware silently ignored
+         resends of the command that tripped it, and every button carried on
+         reporting success. Picking any OTHER direction (or Stop) clears the
+         latch, which is what the text tells you to do. -->
+    <div id="trip-banner">
+      <span class="warn-dot"></span>
+      <span><b>Motor protection tripped</b> — <span id="trip-detail"></span>. The motors are
+      stopped and this direction is locked out. Press Stop, or pick a different direction, to
+      re-arm.</span>
+    </div>
+
+    <!-- Cells hide individually and the row only when they all would: the two
+         currents are facts about the ESP32, CPU is a fact about the Pi, so
+         unplugging the ESP32 must not take the CPU readout with it. -->
+    <div id="current-row">
+      <div class="current-cell" id="cell-m1">Motor 1 current =<b id="m1-current">—</b></div>
+      <div class="current-cell" id="cell-m2">Motor 2 current =<b id="m2-current">—</b></div>
+      <div class="current-cell" id="cell-cpu">CPU usage =<b id="cpu-usage">—</b></div>
     </div>
 
     <div id="follow-banner">
@@ -499,29 +589,87 @@
     pollWifiStatus();
     setInterval(pollWifiStatus, 4000);
 
-    // Pi CPU usage, polled alongside WiFi signal on the same interval.
-    // Server returns {available: false} for one poll after startup (needs
-    // two /proc/stat samples to compute a delta) - indicator just stays
-    // hidden until the second poll lands.
-    const cpuIndicatorEl = document.getElementById('cpu-indicator');
-    const cpuTextEl = document.getElementById('cpu-text');
+    // Motor current, measured by the ESP32 on its sense pins (the same
+    // reading its overcurrent protection runs on) and pushed up the serial
+    // link at 5Hz. This endpoint returns whatever the last reading was and
+    // touches no hardware, so polling it is cheap.
+    //
+    // 1s rather than the 4s the Wi-Fi and CPU indicators use: this is a live
+    // measurement of what the robot is doing under your fingers, not a
+    // slow-moving diagnostic. Not faster than 1s either - the firmware
+    // already averages over its report interval, and a number changing five
+    // times a second is one you can't read while driving.
+    const currentRowEl = document.getElementById('current-row');
+    const linkBannerEl = document.getElementById('link-banner');
+    const tripBannerEl = document.getElementById('trip-banner');
+    const tripDetailEl = document.getElementById('trip-detail');
+    const m1CurrentEl = document.getElementById('m1-current');
+    const m2CurrentEl = document.getElementById('m2-current');
+    const cellM1El = document.getElementById('cell-m1');
+    const cellM2El = document.getElementById('cell-m2');
+    const cellCpuEl = document.getElementById('cell-cpu');
+    const cpuUsageEl = document.getElementById('cpu-usage');
 
-    function pollCpuStatus() {
-      fetch('/robot/cpu_status')
-        .then(r => r.json())
-        .then(d => {
-          if (!d.available) {
-            cpuIndicatorEl.style.display = 'none';
-            return;
-          }
-          cpuIndicatorEl.style.display = 'flex';
-          cpuTextEl.textContent = `CPU: ${d.percent}%`;
-        })
-        .catch(() => {});
+    function formatAmps(value) {
+      return typeof value === 'number' && isFinite(value) ? value.toFixed(2) + ' A' : '—';
     }
 
-    pollCpuStatus();
-    setInterval(pollCpuStatus, 4000);
+    // CPU moved here from the status row alongside Wi-Fi, so it sits with the
+    // motor currents rather than being shown twice. It picked up their 1s
+    // cadence in the move: it used to be a slow diagnostic next to signal
+    // strength, but read beside motor current while driving it is the other
+    // half of "what is this robot doing right now".
+    //
+    // Both fetched together and rendered once, so the row never updates one
+    // half on one tick and the other half on the next.
+    function pollStats() {
+      Promise.all([
+        fetch('/robot/motor_current').then(r => r.json()).catch(() => null),
+        fetch('/robot/cpu_status').then(r => r.json()).catch(() => null)
+      ]).then(([d, cpu]) => {
+        // Server returns {available: false} until it has two /proc/stat
+        // samples to diff, so this cell stays hidden for the first poll.
+        const haveCpu = !!(cpu && cpu.available);
+        cellCpuEl.hidden = !haveCpu;
+        if (haveCpu) cpuUsageEl.textContent = cpu.percent.toFixed(1) + '%';
+
+        // Hidden rather than frozen when there's no reading - an ESP32 that's
+        // gone quiet would otherwise leave a plausible-looking number sitting
+        // there indefinitely. The cells hide independently of CPU, which is a
+        // fact about the Pi and stays up whatever the ESP32 is doing.
+        const haveCurrent = !!(d && d.available);
+        cellM1El.hidden = !haveCurrent;
+        cellM2El.hidden = !haveCurrent;
+        currentRowEl.style.display = (haveCurrent || haveCpu) ? 'flex' : 'none';
+        if (haveCurrent) {
+          m1CurrentEl.textContent = formatAmps(d.m1);
+          m2CurrentEl.textContent = formatAmps(d.m2);
+        }
+
+        if (!d) return;
+
+        // "stale" means this ESP32 was talking and has stopped - the one case
+        // worth interrupting somebody about, because the buttons will keep
+        // reporting success while nothing moves. "unknown" is not a fault:
+        // it's also what firmware older than the CUR: line looks like, and a
+        // permanent red banner on a working rig teaches people to ignore it.
+        linkBannerEl.style.display = d.link === 'stale' ? 'flex' : 'none';
+
+        // e.g. "TRIPPED (M1 sustained)" -> "M1 sustained". Shown only while
+        // the latch is actually set; the ESP32 clears it as soon as a
+        // different command arrives, so this disappears on its own.
+        if (d.tripped) {
+          tripDetailEl.textContent =
+            (d.tripped.match(/\(([^)]*)\)/) || [, d.tripped])[1];
+          tripBannerEl.style.display = 'flex';
+        } else {
+          tripBannerEl.style.display = 'none';
+        }
+      }).catch(() => {});
+    }
+
+    pollStats();
+    setInterval(pollStats, 1000);
 
     // Safety: lets the server tell "still connected, button just held" apart
     // from "connection died mid-drive" (see HEARTBEAT_TIMEOUT_S in

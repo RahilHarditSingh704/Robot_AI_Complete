@@ -90,18 +90,42 @@ def get_wifi_signal():
     return {"available": False}
 
 
-_last_cpu_times = None  # (idle_jiffies, total_jiffies) from the previous call
+# (idle_jiffies, total_jiffies, monotonic_time) of the baseline sample, plus
+# the last percentage computed from it. Guarded by the lock because three
+# separate surfaces poll this now - see get_cpu_usage().
+_cpu_baseline = None
+_cpu_percent = None
+_cpu_lock = threading.Lock()
+
+# Shortest window get_cpu_usage() will measure over. Callers faster than this
+# share the last computed figure rather than each forcing a new, tinier sample.
+CPU_SAMPLE_INTERVAL_S = 1.0
 
 
 def get_cpu_usage():
-    """Pi CPU utilization since the previous call, from /proc/stat jiffy
-    deltas - same no-subprocess/no-root approach as get_wifi_signal(), and
-    for the same reason: computing a percentage needs two samples, and
-    taking both inside one request would mean blocking that request thread
-    on a sleep. Instead each call diffs against the last one, which lines up
-    naturally with the frontend's periodic polling. The first call after
-    startup has no prior sample yet, so it returns {"available": False}."""
-    global _last_cpu_times
+    """Pi CPU utilization, from /proc/stat jiffy deltas - same
+    no-subprocess/no-root approach as get_wifi_signal().
+
+    A percentage needs two samples, and taking both inside one request would
+    block that request thread on a sleep. So this keeps a baseline sample and
+    diffs against it.
+
+    It used to roll that baseline forward on *every* call, which was fine
+    while the driving page was the only caller: one poller, one fixed 4s
+    window. It stopped being fine once the kiosk and the Remote Control
+    mini-app started showing CPU alongside the motor currents. Three
+    independent pollers sharing one baseline means each call measures "since
+    whoever happened to call last" rather than a fixed interval - windows
+    shrink to a third, readings get noisy, and two requests landing in the
+    same jiffy give delta_total == 0 and an intermittent `available: false`
+    that makes the readout flicker.
+
+    So the baseline only advances once CPU_SAMPLE_INTERVAL_S has actually
+    elapsed, and everyone in between gets the last figure computed. Any number
+    of callers at any rate now see the same correctly-windowed number, and the
+    lock keeps two threads from both rolling the baseline at once.
+    """
+    global _cpu_baseline, _cpu_percent
     try:
         with open("/proc/stat") as f:
             line = f.readline()
@@ -118,19 +142,23 @@ def get_cpu_usage():
 
     idle_time = idle + iowait
     total_time = user + nice + system + idle + iowait + irq + softirq
+    now = time.monotonic()
 
-    prev = _last_cpu_times
-    _last_cpu_times = (idle_time, total_time)
-    if prev is None:
-        return {"available": False}
+    with _cpu_lock:
+        if _cpu_baseline is None:
+            _cpu_baseline = (idle_time, total_time, now)
+            return {"available": False}
 
-    delta_idle = idle_time - prev[0]
-    delta_total = total_time - prev[1]
-    if delta_total <= 0:
-        return {"available": False}
+        if now - _cpu_baseline[2] >= CPU_SAMPLE_INTERVAL_S:
+            delta_idle = idle_time - _cpu_baseline[0]
+            delta_total = total_time - _cpu_baseline[1]
+            _cpu_baseline = (idle_time, total_time, now)
+            if delta_total > 0:
+                _cpu_percent = round((1 - delta_idle / delta_total) * 100, 1)
 
-    percent = round((1 - delta_idle / delta_total) * 100, 1)
-    return {"available": True, "percent": percent}
+        if _cpu_percent is None:
+            return {"available": False}
+        return {"available": True, "percent": _cpu_percent}
 
 
 def _connection_watchdog_loop():

@@ -413,6 +413,94 @@ html, body {
   display: none;
 }
 
+/* Follow me chooser -------------------------------------------------------
+   Anchored above the button rather than below it: the button already sits on
+   the bottom edge of a fullscreen kiosk, so a downward menu would open off
+   the screen. */
+#followWrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+#followWrap[hidden] {
+  display: none;
+}
+
+#followMenu {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  min-width: 232px;
+  padding: 8px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(18, 30, 42, 0.97);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 30;
+  animation: followMenuIn 0.14s ease-out;
+}
+
+#followMenu[hidden] {
+  display: none;
+}
+
+@keyframes followMenuIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.followOpt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* Comfortably past the ~44px touch-target minimum: this is a wall-mounted
+     screen people poke at while standing. */
+  min-height: 56px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #eaf4fb;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.followOpt:hover,
+.followOpt:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.followOpt:active {
+  transform: scale(0.98);
+}
+
+.followOptIcon {
+  font-size: 1.5rem;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.followOptText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.followOptName {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.followOptHint {
+  font-size: 0.8rem;
+  color: #9fbdd0;
+}
+
 .pillDot {
   width: 10px;
   height: 10px;

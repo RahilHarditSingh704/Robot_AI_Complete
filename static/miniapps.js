@@ -1070,6 +1070,8 @@ window.KioskMiniApps = (() => {
   // because of a switch someone flipped days ago.
   // =========================================================================
   const remote = (() => {
+    let currentTimer = null;
+
     function mount(root) {
       root.appendChild(
         h(`
@@ -1087,6 +1089,25 @@ window.KioskMiniApps = (() => {
               </div>
             </div>
             <button class="bigBtn primary" id="rcToggle" disabled>…</button>
+          </div>
+
+          <!-- Motor current. Shown whether or not remote access is on: it's a
+               fact about the robot, not about the network door this app
+               opens, and it's just as worth seeing while Follow me is
+               driving. Hidden only when there's no reading to show. -->
+          <div class="card rcCurrent" id="rcCurrent" hidden>
+            <div class="rcCurrentCell" id="rcCellM1">
+              <div class="rcCurrentLabel">Motor 1 current =</div>
+              <div class="rcCurrentValue" id="rcM1">—</div>
+            </div>
+            <div class="rcCurrentCell" id="rcCellM2">
+              <div class="rcCurrentLabel">Motor 2 current =</div>
+              <div class="rcCurrentValue" id="rcM2">—</div>
+            </div>
+            <div class="rcCurrentCell" id="rcCellCpu">
+              <div class="rcCurrentLabel">CPU usage =</div>
+              <div class="rcCurrentValue" id="rcCpu">—</div>
+            </div>
           </div>
 
           <div class="card rcAddress" id="rcAddress" hidden>
@@ -1193,9 +1214,60 @@ window.KioskMiniApps = (() => {
           failed("Couldn't reach the robot server.");
         }
       });
+
+      // --- motor current and CPU ---
+      // Motor current is measured on the ESP32 and pushed up the serial link;
+      // /robot/motor_current just hands back the last reading, so neither poll
+      // touches hardware. Polled only while this app is open - see unmount() -
+      // unlike Ruby's own readout, which is always on screen and always polling.
+      const currentCard = root.querySelector("#rcCurrent");
+      const cellM1 = root.querySelector("#rcCellM1");
+      const cellM2 = root.querySelector("#rcCellM2");
+      const cellCpu = root.querySelector("#rcCellCpu");
+      const m1El = root.querySelector("#rcM1");
+      const m2El = root.querySelector("#rcM2");
+      const cpuEl = root.querySelector("#rcCpu");
+
+      function formatAmps(value) {
+        return typeof value === "number" && isFinite(value) ? `${value.toFixed(2)} A` : "—";
+      }
+
+      async function pollStats() {
+        const [current, cpu] = await Promise.all([
+          fetch("/robot/motor_current").then((r) => r.json()).catch(() => null),
+          fetch("/robot/cpu_status").then((r) => r.json()).catch(() => null),
+        ]);
+        // Cells hide individually, and the card only when they all would.
+        // Hidden rather than frozen when the ESP32 is absent or has gone
+        // quiet: a stale number here looks exactly like a live one. CPU is a
+        // fact about the Pi, so it stays up whatever the ESP32 is doing.
+        const haveCurrent = !!(current && current.available);
+        const haveCpu = !!(cpu && cpu.available);
+        cellM1.hidden = !haveCurrent;
+        cellM2.hidden = !haveCurrent;
+        cellCpu.hidden = !haveCpu;
+        currentCard.hidden = !(haveCurrent || haveCpu);
+        if (haveCurrent) {
+          m1El.textContent = formatAmps(current.m1);
+          m2El.textContent = formatAmps(current.m2);
+        }
+        if (haveCpu) cpuEl.textContent = `${cpu.percent.toFixed(1)}%`;
+      }
+
+      pollStats();
+      currentTimer = setInterval(pollStats, 1000);
     }
 
-    return { mount, unmount() {} };
+    // Was a no-op until this app started polling. Without clearing the timer
+    // it would keep firing after the app is closed, and mounting it again
+    // would stack a second one on top - the same pattern the System app's
+    // vitals timer already follows.
+    function unmount() {
+      clearInterval(currentTimer);
+      currentTimer = null;
+    }
+
+    return { mount, unmount };
   })();
 
   // =========================================================================
