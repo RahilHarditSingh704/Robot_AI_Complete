@@ -1,5 +1,41 @@
 # Robot AI Complete — Architecture & Code Guide
 
+## Prerequisites
+- Git
+- Python 3.10+
+- [anything else: Ollama, system packages, etc.]
+
+## Getting the repo
+
+```bash
+cd ~/Projects                 # or: cd C:\Users\YourName\Documents\Projects
+git clone https://github.com/RahilHarditSingh704/Robot_AI_Complete.git
+cd Robot_AI_Complete
+code .
+```
+
+## Setup (first time only)
+
+```bash
+python3 -m venv venv
+source venv/bin/activate      # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Running
+
+```bash
+source venv/bin/activate      # every new terminal session
+chmod +x start.sh             # first time only
+./start.sh
+```
+
+The server should come up at `http://localhost:5000`.
+Press `Ctrl+C` to stop.
+
+
+# Note that for remote control you need to download locally tailscale which you can find more info about on the Software 2 tab of the google doc 
+
 > A comprehensive guide to how every part of this project works, from the high-level Python web interface and AI kiosk down to the ESP32 motor controller firmware.
 
 ---
