@@ -2,7 +2,7 @@
 
 ## Prerequisites
 - Git
-- Python 3.10+
+- Python 3.12
 - [anything else: Ollama, system packages, etc.]
 
 ## Getting the repo
