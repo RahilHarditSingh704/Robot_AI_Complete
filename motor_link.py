@@ -153,14 +153,14 @@ class MotorLink:
         self._lock = threading.RLock()
         self._current_cmd = "S"
         self._running = True
-        # Guards against a wasted, fully-redundant second 5-attempt/~5s
-        # reconnect round: _reader_loop's readline() and a concurrent
-        # _write() (from a /command request) can both hit SerialException
-        # around the same moment and each call _reconnect() independently -
-        # the RLock only serializes them, it doesn't tell the second caller
-        # "someone already just tried this and failed a moment ago", so
-        # without this they stack into back-to-back full rounds and roughly
-        # double the real outage. See _reconnect() below.
+        # Guards against a wasted, fully-redundant reconnect attempt right
+        # on the heels of one that just finished: _reader_loop's readline()
+        # and a concurrent _write() (from a /command request) can both hit
+        # SerialException around the same moment and each call _reconnect()
+        # independently - the RLock only serializes them, it doesn't tell
+        # the second caller "someone already just tried this and failed a
+        # moment ago". This also paces _reconnect()'s own retries now that
+        # it no longer loops internally - see _reconnect() below.
         self._last_reconnect_finish_time = 0.0
         self._last_reconnect_succeeded = False
         # Called from _reader_loop whenever the ESP32 reports a current-
@@ -414,21 +414,25 @@ class MotorLink:
                 raise
 
     def _reconnect(self):
-        """Re-probe for the ESP32 and reopen the serial connection. Retries
-        a few times with a short pause since the new device node can take a
-        moment to appear after the old one disappears (see _write).
+        """Re-probe for the ESP32 and reopen the serial connection.
 
-        _reader_loop and a concurrent _write() (from a /command request)
-        can each hit SerialException around the same moment and both call
-        this - the RLock means they never literally overlap, but without
-        the cooldown check below, the second caller would still burn a
-        full fresh 5-attempt/~5s round immediately after the first one just
-        finished, roughly doubling the real outage for no benefit (the
-        device's state can't have changed in the few milliseconds between
-        them). Reusing the just-finished outcome instead - success or
-        failure - fixes that without weakening retry persistence: a
-        genuinely persistent outage still gets retried, just paced by the
-        cooldown instead of immediately stacked back-to-back."""
+        Makes exactly one attempt and returns quickly either way. This used
+        to retry up to 5 times with a 1s sleep between attempts, all while
+        holding self._lock - the same lock send_command() needs for every
+        D-pad press, every follow command, and the resend heartbeat. Worst
+        case that held the lock for ~5-10s on every single reconnect, which
+        turns a brief hardware blip (see the brownout note on
+        _revive_if_silent) into a multi-second freeze of every command in
+        the system, and this rig blips often enough that those freezes
+        stack up into exactly the "movements stick" symptom.
+
+        Retry persistence still happens, just not by looping in here:
+        _write() calls this on every failed write and _reader_loop calls it
+        on every failed read, so a genuinely absent ESP32 keeps getting
+        retried at roughly RECONNECT_COOLDOWN_S pace regardless - the
+        cooldown check below is what was already pacing repeated callers,
+        it just now also paces this method's own retries instead of a
+        private loop duplicating that job under the lock."""
         with self._lock:
             if time.time() - self._last_reconnect_finish_time < RECONNECT_COOLDOWN_S:
                 return self._last_reconnect_succeeded
@@ -437,26 +441,24 @@ class MotorLink:
                 self.ser.close()
             except Exception:
                 pass
-            for attempt in range(5):
-                try:
-                    new_port = find_esp32_port()
-                    self.ser = serial.Serial(new_port, self.baud, timeout=0.2)
-                    # The step this used to be missing, and the reason a
-                    # "Reconnected" line could be followed by a completely
-                    # dead link: reopening the port says nothing about what
-                    # the chip on the far end is doing. See _reset_esp32().
-                    self._reset_esp32()
-                    self.port_name = new_port
-                    print(f"[motor_link] Reconnected to ESP32 on {self.port_name}")
-                    self._last_reconnect_finish_time = time.time()
-                    self._last_reconnect_succeeded = True
-                    return True
-                except Exception as e:
-                    print(f"[motor_link] Reconnect attempt {attempt + 1}/5 failed: {e}")
-                    time.sleep(1.0)
-            self._last_reconnect_finish_time = time.time()
-            self._last_reconnect_succeeded = False
-            return False
+            try:
+                new_port = find_esp32_port()
+                self.ser = serial.Serial(new_port, self.baud, timeout=0.2)
+                # The step this used to be missing, and the reason a
+                # "Reconnected" line could be followed by a completely
+                # dead link: reopening the port says nothing about what
+                # the chip on the far end is doing. See _reset_esp32().
+                self._reset_esp32()
+                self.port_name = new_port
+                print(f"[motor_link] Reconnected to ESP32 on {self.port_name}")
+                self._last_reconnect_finish_time = time.time()
+                self._last_reconnect_succeeded = True
+                return True
+            except Exception as e:
+                print(f"[motor_link] Reconnect attempt failed: {e}")
+                self._last_reconnect_finish_time = time.time()
+                self._last_reconnect_succeeded = False
+                return False
 
     def _resend_loop(self):
         """Keeps re-sending the current command so the ESP32's watchdog
